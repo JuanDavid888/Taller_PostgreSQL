@@ -1,4 +1,4 @@
--- Active: 1755861341063@@127.0.0.1@5433@taller
+-- Active: 1755894826645@@127.0.0.1@5433@taller@miscompras
 
 \l;
 
@@ -30,7 +30,7 @@ DROP SCHEMA IF EXISTS miscompras CASCADE;
 CREATE SCHEMA IF NOT EXISTS miscompras;
 SET search_path TO miscompras;
 
-CREATE TABLE clientes (
+CREATE TABLE miscompras.clientes (
     id                 VARCHAR(20)  PRIMARY KEY,
     nombre             VARCHAR(40)  NOT NULL,
     apellidos          VARCHAR(100) NOT NULL,

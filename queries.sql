@@ -133,8 +133,8 @@ SELECT
     DATE_TRUNC('month', c.fecha) AS mes,
     COUNT(DISTINCT c.id_compra) AS num_compras,
     SUM(cp.total) AS total_ventas
-FROM compras c
-JOIN compras_productos cp USING (id_compra)
+FROM miscompras.compras c
+JOIN miscompras.compras_productos cp USING (id_compra)
 WHERE cp.estado = 1
 GROUP BY DATE_TRUNC('month', c.fecha)
 ORDER BY mes;
@@ -145,11 +145,11 @@ SELECT
     p.nombre,
     p.precio_venta,
     p.cantidad_stock
-FROM productos p
+FROM miscompras.productos p
 WHERE p.estado = 1
     AND NOT EXISTS (
         SELECT 1
-        FROM compras_productos cp
+        FROM miscompras.compras_productos cp
         WHERE cp.id_producto = p.id_producto
             AND cp.estado = 1
     )
@@ -162,15 +162,15 @@ SELECT DISTINCT
     cl.nombre || ' ' || cl.apellidos AS cliente,
     c.fecha
 FROM clientes cl
-JOIN compras c ON c.id_cliente = cl.id
-JOIN compras_productos cp ON cp.id_compra = c.id_compra
-JOIN productos p ON cp.id_producto = p.id_producto
+JOIN miscompras.compras c ON c.id_cliente = cl.id
+JOIN miscompras.compras_productos cp ON cp.id_compra = c.id_compra
+JOIN miscompras.productos p ON cp.id_producto = p.id_producto
 WHERE p.nombre ILIKE 'cafe%'
     AND cp.estado = 1
     AND EXISTS (
         SELECT 1
-        FROM compras_productos cp2
-        JOIN productos p2 ON cp2.id_producto = p2.id_producto
+        FROM miscompras.compras_productos cp2
+        JOIN miscompras.productos p2 ON cp2.id_producto = p2.id_producto
         WHERE cp2.id_compra = c.id_compra
             AND p2.nombre ILIKE 'pan%'
             AND cp2.estado = 1
@@ -184,7 +184,7 @@ SELECT
     precio_venta,
     ROUND(precio_venta * 0.5, 2) AS costo_estimado,
     ROUND(((precio_venta - (precio_venta * 0.5)) / precio_venta) * 100, 1) AS margen_porcentual
-FROM productos
+FROM miscompras.productos
 WHERE estado = 1
 ORDER BY margen_porcentual DESC;
 
@@ -194,7 +194,7 @@ SELECT
     nombre,
     apellidos,
     TRIM(correo_electronico) AS email
-FROM clientes
+FROM miscompras.clientes
 WHERE TRIM(correo_electronico) ~* '.*@example.com$'
 ORDER BY apellidos, nombre;
 
@@ -203,7 +203,7 @@ ORDER BY apellidos, nombre;
 SELECT 
     INITCAP(TRIM(nombre)) AS nombre,
     INITCAP(TRIM(apellidos)) AS apellidos
-FROM clientes
+FROM miscompras.clientes
 ORDER BY apellidos, nombre;
 
 -- 18. Selecciona los productos cuyo `id_producto` es par
@@ -212,7 +212,7 @@ SELECT
     id_producto,
     nombre,
     precio_venta
-FROM productos
+FROM miscompras.productos
 WHERE id_producto % 2 = 0
     AND estado = 1
 ORDER BY id_producto;
@@ -225,8 +225,8 @@ SELECT
     c.id_cliente,
     c.fecha,
     SUM(cp.total) AS total_compra
-FROM compras c
-JOIN compras_productos cp USING (id_compra)
+FROM miscompras.compras c
+JOIN miscompras.compras_productos cp USING (id_compra)
 WHERE cp.estado = 1
 GROUP BY c.id_compra, c.id_cliente, c.fecha;
 
@@ -238,12 +238,12 @@ SELECT * FROM ventas_por_compra;
 
 CREATE MATERIALIZED VIEW mv_ventas_mensuales AS
 SELECT 
-    DATE_TRUNC('month', co.fecha) AS mes,
-    COUNT(DISTINCT co.id_compra) AS num_compras,
-    COUNT(DISTINCT co.id_cliente) AS clientes_unicos,
+    DATE_TRUNC('month', c.fecha) AS mes,
+    COUNT(DISTINCT c.id_compra) AS num_compras,
+    COUNT(DISTINCT c.id_cliente) AS clientes_unicos,
     SUM(cp.total) AS total_mes
-FROM compras co
-JOIN compras_productos cp USING (id_compra)
+FROM miscompras.compras c
+JOIN miscompras.compras_productos cp USING (id_compra)
 WHERE cp.estado = 1
 GROUP BY DATE_TRUNC('month', co.fecha)
 ORDER BY mes;
@@ -267,7 +267,7 @@ FROM (
     SELECT 
         id_producto,
         SUM(cantidad) AS total_vendido
-    FROM compras_productos
+    FROM miscompras.compras_productos
     WHERE estado = 1
     GROUP BY id_producto
 ) AS vendido
@@ -275,4 +275,77 @@ WHERE productos.id_producto = vendido.id_producto;
 
 SELECT * FROM productos;
 
--- 
+-- 23. Implementa una función PL/pgSQL (`miscompras.fn_total_compra`) que reciba `p_id_compra` y retorne el `total`
+
+CREATE OR REPLACE FUNCTION miscompras.fn_total_compra(p_id_compra INT)
+RETURNS NUMERIC(16,2)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_total NUMERIC(16,2);
+BEGIN
+    SELECT COALESCE(SUM(total), 0)
+    INTO v_total
+    FROM miscompras.compras_productos
+    WHERE id_compra = p_id_compra 
+        AND estado = 1;
+    
+    RETURN v_total;
+END;
+$$;
+
+SELECT miscompras.fn_total_compra(1);
+
+-- 24. Define un trigger `AFTER INSERT` sobre `compras_productos` que descuente stock mediante una función
+
+CREATE OR REPLACE FUNCTION miscompras.fn_descontar_stock()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE miscompras.productos
+    SET cantidad_stock = GREATEST(cantidad_stock - NEW.cantidad, 0)
+    WHERE id_producto = NEW.id_producto;
+    
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tr_descontar_stock
+    AFTER INSERT ON miscompras.compras_productos
+    FOR EACH ROW
+    EXECUTE FUNCTION miscompras.fn_descontar_stock();
+
+-- 25. Asigna la “posición por precio” de cada producto dentro de su categoría
+
+SELECT 
+    ca.descripcion AS categoria,
+    p.nombre,
+    p.precio_venta,
+    DENSE_RANK() OVER (PARTITION BY ca.id_categoria ORDER BY p.precio_venta DESC) AS posicion_precio
+FROM miscompras.productos p
+JOIN miscompras.categorias ca USING (id_categoria)
+WHERE p.estado = 1
+ORDER BY categoria, posicion_precio;
+
+-- 26. Para cada cliente, muestra su gasto por compra, el gasto anterior y el delta entre compras por día 
+
+WITH gastos_diarios AS (
+    SELECT 
+        c.id_cliente,
+        c.fecha::date AS dia,
+        SUM(cp.total) AS gasto_dia
+    FROM miscompras.compras c
+    JOIN miscompras.compras_productos cp ON cp.id_compra = c.id_compra
+    WHERE cp.estado = 1
+    GROUP BY c.id_cliente, c.fecha::date
+)
+SELECT 
+    c.nombre || ' ' || c.apellidos AS cliente,
+    gd.dia,
+    gd.gasto_dia,
+    LAG(gd.gasto_dia) OVER (PARTITION BY gd.id_cliente ORDER BY gd.dia) AS gasto_anterior,
+    gd.gasto_dia - LAG(gd.gasto_dia) OVER (PARTITION BY gd.id_cliente ORDER BY gd.dia) AS delta_gasto
+FROM gastos_diarios gd
+JOIN miscompras.clientes c ON c.id = gd.id_cliente
+ORDER BY c.nombre, gd.dia;
