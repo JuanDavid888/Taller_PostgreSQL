@@ -8,7 +8,7 @@ CREATE SCHEMA IF NOT EXISTS miscompras;
 
 SET search_path TO miscompras;
 
-CREATE DATABASE miscompras;
+CREATE DATABASE taller;
 
 \c miscompras;
 
